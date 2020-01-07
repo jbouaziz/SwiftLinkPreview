@@ -1,3 +1,4 @@
+// swift-tools-version:5.1
 //
 //  Package.swift
 //  SwiftLinkPreview
@@ -6,7 +7,6 @@
 //  Copyright © 2016 leocardz.com. All rights reserved.
 //
 
-// swift-tools-version:5.1
 import PackageDescription
 
 let package = Package(
