@@ -76,7 +76,6 @@ open class SwiftLinkPreview: NSObject {
         self.responseQueue = _responseQueue
         self.cache = _cache
         self.session = _session
-
     }
 
     // MARK: - Functions
@@ -86,69 +85,65 @@ open class SwiftLinkPreview: NSObject {
 
         let cancellable = Cancellable()
 
-        self.session = URLSession(configuration: self.session.configuration,
-                                  delegate: self, // To handle redirects
-            delegateQueue: self.session.delegateQueue)
+        self.session = URLSession(
+            configuration: self.session.configuration,
+            delegate: self, // To handle redirects
+            delegateQueue: self.session.delegateQueue
+        )
 
         let successResponseQueue = { (response: Response) in
-            if !cancellable.isCancelled {
-                self.responseQueue.async {
-                    if !cancellable.isCancelled {
-                        onSuccess(response)
-                    }
-                }
+            guard !cancellable.isCancelled else { return }
+            self.responseQueue.async {
+                guard !cancellable.isCancelled else { return }
+                onSuccess(response)
             }
         }
 
         let errorResponseQueue = { (error: PreviewError) in
-            if !cancellable.isCancelled {
-                self.responseQueue.async {
-                    if !cancellable.isCancelled {
-                        onError(error)
-                    }
-                }
+            guard !cancellable.isCancelled else { return }
+            self.responseQueue.async {
+                guard !cancellable.isCancelled else { return }
+                onError(error)
             }
         }
 
-        if let url = self.extractURL(text: text) {
-            workQueue.async {
-                if cancellable.isCancelled {return}
-
-                if let result = self.cache.slp_getCachedResponse(url: url.absoluteString) {
-                    successResponseQueue(result)
-                } else {
-
-                    self.unshortenURL(url, cancellable: cancellable, completion: { unshortened in
-                        if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
-                            successResponseQueue(result)
-                        } else {
-                            
-                            var result = Response()
-                            result.url = url
-                            result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
-                            result.canonicalUrl = self.extractCanonicalURL(unshortened)
-
-                            self.extractInfo(response: result, cancellable: cancellable, completion: {
-
-                                result.title = $0.title
-                                result.description = $0.description
-                                result.image = $0.image
-                                result.images = $0.images
-                                result.icon = $0.icon
-                                result.video = $0.video
-                                result.price = $0.price
-
-                                self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
-                                self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
-
-                                successResponseQueue(result)
-                            }, onError: errorResponseQueue)
-                        }
-                    }, onError: errorResponseQueue)
-                }
-            }
-        } else {
+        guard let url = self.extractURL(text: text) else {
             onError(.noURLHasBeenFound(text))
+            return cancellable
+        }
+        workQueue.async {  [unowned self] in
+            guard !cancellable.isCancelled else { return }
+
+            if let result = self.cache.slp_getCachedResponse(url: url.absoluteString) {
+                successResponseQueue(result)
+            } else {
+
+                self.unshortenURL(url, cancellable: cancellable, completion: { unshortened in
+                    if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
+                        successResponseQueue(result)
+                    } else {
+                        var result = Response()
+                        result.url = url
+                        result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
+                        result.canonicalUrl = self.extractCanonicalURL(unshortened)
+
+                        self.extractInfo(response: result, cancellable: cancellable, completion: {
+                            result.title = $0.title
+                            result.description = $0.description
+                            result.image = $0.image
+                            result.images = $0.images
+                            result.icon = $0.icon
+                            result.video = $0.video
+                            result.price = $0.price
+
+                            self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
+                            self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
+
+                            successResponseQueue(result)
+                        }, onError: errorResponseQueue)
+                    }
+                }, onError: errorResponseQueue)
+            }
         }
 
         return cancellable
@@ -252,34 +247,33 @@ extension SwiftLinkPreview {
         request.httpMethod = "HEAD"
 
         task = session.dataTask(with: request, completionHandler: { data, response, error in
-            if error != nil {
+            defer {
+                task = nil
+            }
+            guard error == nil else {
                 self.workQueue.async {
                     if !cancellable.isCancelled {
                         onError(.cannotBeOpened("\(url.absoluteString): \(error.debugDescription)"))
                     }
                 }
-                task = nil
-            } else {
-                if let finalResult = response?.url {
-                    if (finalResult.absoluteString == url.absoluteString) {
-                        self.workQueue.async {
-                            if !cancellable.isCancelled {
-                                completion(url)
-                            }
-                        }
-                        task = nil
-                    } else {
-                        task?.cancel()
-                        task = nil
-                        self.unshortenURL(finalResult, cancellable: cancellable, completion: completion, onError: onError)
-                    }
-                } else {
+                return
+            }
+            if let finalResult = response?.url {
+                if (finalResult.absoluteString == url.absoluteString) {
                     self.workQueue.async {
                         if !cancellable.isCancelled {
                             completion(url)
                         }
                     }
-                    task = nil
+                } else {
+                    task?.cancel()
+                    self.unshortenURL(finalResult, cancellable: cancellable, completion: completion, onError: onError)
+                }
+            } else {
+                self.workQueue.async {
+                    if !cancellable.isCancelled {
+                        completion(url)
+                    }
                 }
             }
         })
@@ -314,58 +308,55 @@ extension SwiftLinkPreview {
 
         }
 
-        if url.absoluteString.isImage() {
+        guard !url.absoluteString.isImage() else {
             var result = response
-
             result.title = ""
             result.description = ""
             result.images = [url.absoluteString]
             result.image = url.absoluteString
-
             completion(result)
+            return
+        }
+
+        guard let sourceUrl = url.scheme == "http" || url.scheme == "https" ? url: URL( string: "http://\(url)" )
+            else {
+                if !cancellable.isCancelled { onError(.invalidURL(url.absoluteString)) }
+                return
+        }
+        var request = URLRequest( url: sourceUrl )
+        request.addValue("text/html,application/xhtml+xml,application/xml", forHTTPHeaderField: "Accept")
+        let (data, urlResponse, error) = session.synchronousDataTask(with: request )
+        if let error = error {
+            if !cancellable.isCancelled {
+                let details = "\(sourceUrl.absoluteString): \(error.localizedDescription)"
+                onError( .cannotBeOpened( details ) )
+                return
+            }
+        }
+        if let data = data, let urlResponse = urlResponse, let encoding = urlResponse.textEncodingName,
+            let source = NSString( data: data, encoding:
+                CFStringConvertEncodingToNSStringEncoding( CFStringConvertIANACharSetNameToEncoding( encoding as CFString ) ) ) {
+            if !cancellable.isCancelled {
+                self.parseHtmlString(source as String, response: response, completion: completion)
+            }
         } else {
+            do {
+                let data = try Data(contentsOf: sourceUrl)
+                var source: NSString? = nil
+                NSString.stringEncoding(for: data, encodingOptions: nil, convertedString: &source, usedLossyConversion: nil)
 
-            guard let sourceUrl = url.scheme == "http" || url.scheme == "https" ? url: URL( string: "http://\(url)" )
-                else {
-                    if !cancellable.isCancelled { onError(.invalidURL(url.absoluteString)) }
-                    return
-            }
-            var request = URLRequest( url: sourceUrl )
-            request.addValue("text/html,application/xhtml+xml,application/xml", forHTTPHeaderField: "Accept")
-            let (data, urlResponse, error) = session.synchronousDataTask(with: request )
-            if let error = error {
-                if !cancellable.isCancelled {
-                    let details = "\(sourceUrl.absoluteString): \(error.localizedDescription)"
-                    onError( .cannotBeOpened( details ) )
-                    return
-                }
-            }
-            if let data = data, let urlResponse = urlResponse, let encoding = urlResponse.textEncodingName,
-                let source = NSString( data: data, encoding:
-                    CFStringConvertEncodingToNSStringEncoding( CFStringConvertIANACharSetNameToEncoding( encoding as CFString ) ) ) {
-                if !cancellable.isCancelled {
-                    self.parseHtmlString(source as String, response: response, completion: completion)
-                }
-            } else {
-                do {
-                    let data = try Data(contentsOf: sourceUrl)
-                    var source: NSString? = nil
-                    NSString.stringEncoding(for: data, encodingOptions: nil, convertedString: &source, usedLossyConversion: nil)
-
-                    if let source = source {
-                        if !cancellable.isCancelled {
-                            self.parseHtmlString(source as String, response: response, completion: completion)
-                        }
-                    } else {
-                        onError(.cannotBeOpened(sourceUrl.absoluteString))
-                    }
-                } catch _ {
+                if let source = source {
                     if !cancellable.isCancelled {
-                        onError(.parseError(sourceUrl.absoluteString))
+                        self.parseHtmlString(source as String, response: response, completion: completion)
                     }
+                } else {
+                    onError(.cannotBeOpened(sourceUrl.absoluteString))
+                }
+            } catch _ {
+                if !cancellable.isCancelled {
+                    onError(.parseError(sourceUrl.absoluteString))
                 }
             }
-
         }
     }
 
@@ -414,41 +405,20 @@ extension SwiftLinkPreview {
             .replace("file://", with: "")
             .replace("ftp://", with: "")
 
-        if preUrl != url {
-
-            if let canonicalUrl = Regex.pregMatchFirst(url, regex: Regex.cannonicalUrlPattern, index: 1) {
-
-                if !canonicalUrl.isEmpty {
-
-                    return self.extractBaseUrl(canonicalUrl)
-
-                } else {
-
-                    return self.extractBaseUrl(url)
-
-                }
-
-            } else {
-
-                return self.extractBaseUrl(url)
-
-            }
-
-        } else {
-
+        guard preUrl != url else {
             return self.extractBaseUrl(preUrl)
-
         }
-
+        if let canonicalUrl = Regex.pregMatchFirst(url, regex: Regex.cannonicalUrlPattern, index: 1),
+            !canonicalUrl.isEmpty {
+            return extractBaseUrl(canonicalUrl)
+        }
+        return extractBaseUrl(url)
     }
 
     // Extract base URL
     fileprivate func extractBaseUrl(_ url: String) -> String {
-
         return String(url.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)[0])
-
     }
-
 }
 
 // Tag functions
@@ -464,12 +434,13 @@ extension SwiftLinkPreview {
         ]
 
         for filter in filters {
-            if let first = metatags.filter(filter).first {
-                let matches = Regex.pregMatchAll(first, regex: Regex.hrefPattern, index: 1)
-                if let val = matches.first {
-                    result.icon = self.addImagePrefixIfNeeded(val.replace("\"", with: ""), result: result)
-                    return result
-                }
+            guard let first = metatags.filter(filter).first else {
+                continue
+            }
+            let matches = Regex.pregMatchAll(first, regex: Regex.hrefPattern, index: 1)
+            if let val = matches.first {
+                result.icon = self.addImagePrefixIfNeeded(val.replace("\"", with: ""), result: result)
+                return result
             }
         }
 
@@ -564,9 +535,7 @@ extension SwiftLinkPreview {
     internal func crawlImages(_ htmlCode: String, result: Response) -> Response {
 
         var result = result
-
         let mainImage = result.image
-
         if mainImage == nil || mainImage?.isEmpty == true {
 
             let images = result.images
@@ -626,13 +595,10 @@ extension SwiftLinkPreview {
     }
 
     private func removeSuffixIfNeeded(_ image: String) -> String {
-
-        var image = image
-
-        if let index = image.firstIndex(of: "?") { image = String(image[..<index]) }
-
+        if let index = image.firstIndex(of: "?") {
+            return String(image[..<index])
+        }
         return image
-
     }
 
     // Crawl the entire code
@@ -640,52 +606,27 @@ extension SwiftLinkPreview {
 
         let resultFirstSearch = self.getTagContent("p", content: content, minimum: minimum)
 
-        if !resultFirstSearch.isEmpty {
-
+        guard resultFirstSearch.isEmpty else {
             return resultFirstSearch
-
-        } else {
-
-            let resultSecondSearch = self.getTagContent("div", content: content, minimum: minimum)
-
-            if !resultSecondSearch.isEmpty {
-
-                return resultSecondSearch
-
-            } else {
-
-                let resultThirdSearch = self.getTagContent("span", content: content, minimum: minimum)
-
-                if !resultThirdSearch.isEmpty {
-
-                    return resultThirdSearch
-
-                } else {
-
-                    if resultThirdSearch.count >= resultFirstSearch.count {
-
-                        if resultThirdSearch.count >= resultThirdSearch.count {
-
-                            return resultThirdSearch
-
-                        } else {
-
-                            return resultThirdSearch
-
-                        }
-
-                    } else {
-
-                        return resultFirstSearch
-
-                    }
-
-                }
-
-            }
-
         }
 
+        let resultSecondSearch = self.getTagContent("div", content: content, minimum: minimum)
+        guard resultSecondSearch.isEmpty else {
+            return resultSecondSearch
+        }
+
+        let resultThirdSearch = self.getTagContent("span", content: content, minimum: minimum)
+        guard resultThirdSearch.isEmpty else {
+            return resultThirdSearch
+        }
+        if resultThirdSearch.count >= resultFirstSearch.count {
+            if resultThirdSearch.count >= resultThirdSearch.count {
+                return resultThirdSearch
+            }
+            return resultThirdSearch
+
+        }
+        return resultFirstSearch
     }
 
     // Get tag content
@@ -699,14 +640,9 @@ extension SwiftLinkPreview {
         let matches = rawMatches.filter({ $0.extendedTrim.tagsStripped.count >= minimum })
         var result = matches.count > 0 ? matches[0] : ""
 
-        if result.isEmpty {
-
-            if let match = Regex.pregMatchFirst(content, regex: pattern, index: 2) {
-
-                result = match.extendedTrim.tagsStripped
-
-            }
-
+        if result.isEmpty,
+            let match = Regex.pregMatchFirst(content, regex: pattern, index: 2) {
+            result = match.extendedTrim.tagsStripped
         }
 
         return result
@@ -715,8 +651,8 @@ extension SwiftLinkPreview {
 
 }
 
+// MARK: - URLSessionDataDelegate
 extension SwiftLinkPreview: URLSessionDataDelegate {
-
     public func urlSession(_ session: URLSession,
                            task: URLSessionTask,
                            willPerformHTTPRedirection response: HTTPURLResponse,
@@ -726,5 +662,4 @@ extension SwiftLinkPreview: URLSessionDataDelegate {
         request.httpMethod = "GET"
         completionHandler(request)
     }
-
 }
