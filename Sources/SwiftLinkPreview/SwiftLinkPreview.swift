@@ -122,20 +122,9 @@ open class SwiftLinkPreview: NSObject {
                     if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
                         successResponseQueue(result)
                     } else {
-                        var result = Response()
-                        result.url = url
-                        result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
-                        result.canonicalUrl = self.extractCanonicalURL(unshortened)
+                        var result = Response(url: url)
 
-                        self.extractInfo(response: result, cancellable: cancellable, completion: {
-                            result.title = $0.title
-                            result.description = $0.description
-                            result.image = $0.image
-                            result.images = $0.images
-                            result.icon = $0.icon
-                            result.video = $0.video
-                            result.price = $0.price
-
+                        self.extractInfo(response: &result, cancellable: cancellable, completion: { result in
                             self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
                             self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
 
@@ -147,34 +136,6 @@ open class SwiftLinkPreview: NSObject {
         }
 
         return cancellable
-    }
-
-    /*
-     Extract url redirection inside the GET query.
-     Like https://www.dji.com/404?url=http%3A%2F%2Fwww.dji.com%2Fmatrice600-pro%2Finfo#specs -> http://www.dji.com/de/matrice600-pro/info#specs
-     */
-    private func extractInURLRedirectionIfNeeded(_ url: URL) -> URL {
-        var url = url
-        var absoluteString = url.absoluteString + "&id=12"
-
-        if let range = absoluteString.range(of: "url="),
-            let lastChar = absoluteString.last,
-            let lastCharIndex = absoluteString.range(of: String(lastChar), options: .backwards, range: nil, locale: nil) {
-            absoluteString = String(absoluteString[range.upperBound ..< lastCharIndex.upperBound])
-
-            if let range = absoluteString.range(of: "&"),
-                let firstChar = absoluteString.first,
-                let firstCharIndex = absoluteString.firstIndex(of: firstChar) {
-                absoluteString = String(absoluteString[firstCharIndex ..< absoluteString.index(before: range.upperBound)])
-
-                if let decoded = absoluteString.removingPercentEncoding, let newURL = URL(string: decoded) {
-                    url = newURL
-                }
-            }
-
-        }
-
-        return url
     }
 
     //Objective-C wrapper for preview method.  Core incompataility is use of Swift specific enum types in closures.
@@ -290,31 +251,16 @@ extension SwiftLinkPreview {
     }
 
     // Extract HTML code and the information contained on it
-    fileprivate func extractInfo(response: Response, cancellable: Cancellable, completion: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) {
+    fileprivate func extractInfo(response: inout Response, cancellable: Cancellable, completion: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) {
+        guard !cancellable.isCancelled else { return }
 
-        guard !cancellable.isCancelled, let url = response.finalUrl else { return }
-
-        func requestSync(sourceUrl: URL, request: URLRequest) -> (Bool, Data?, URLResponse?) {
-
-            let (data, urlResponse, error) = session.synchronousDataTask(with: request )
-            if let error = error {
-                if !cancellable.isCancelled {
-                    let details = "\(sourceUrl.absoluteString): \(error.localizedDescription)"
-                    onError( .cannotBeOpened( details ) )
-                    return (false, data, urlResponse)
-                }
-            }
-            return (true, data, urlResponse)
-
-        }
+        let url = response.finalUrl
 
         guard !url.absoluteString.isImage() else {
-            var result = response
-            result.title = ""
-            result.description = ""
-            result.images = [url.absoluteString]
-            result.image = url.absoluteString
-            completion(result)
+            // If it's an image, there's no title
+            response.images = [url.absoluteString]
+            response.image = url.absoluteString
+            completion(response)
             return
         }
 
@@ -393,31 +339,6 @@ extension SwiftLinkPreview {
         otherResponse = self.crawlPrice(otherResponse.htmlCode, result: otherResponse.result)
 
         return self.crawlImages(otherResponse.htmlCode, result: otherResponse.result)
-    }
-
-    // Extract canonical URL
-    internal func extractCanonicalURL(_ finalUrl: URL) -> String {
-
-        let preUrl: String = finalUrl.absoluteString
-        let url = preUrl
-            .replace("http://", with: "")
-            .replace("https://", with: "")
-            .replace("file://", with: "")
-            .replace("ftp://", with: "")
-
-        guard preUrl != url else {
-            return self.extractBaseUrl(preUrl)
-        }
-        if let canonicalUrl = Regex.pregMatchFirst(url, regex: Regex.cannonicalUrlPattern, index: 1),
-            !canonicalUrl.isEmpty {
-            return extractBaseUrl(canonicalUrl)
-        }
-        return extractBaseUrl(url)
-    }
-
-    // Extract base URL
-    fileprivate func extractBaseUrl(_ url: String) -> String {
-        return String(url.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)[0])
     }
 }
 
@@ -574,20 +495,19 @@ extension SwiftLinkPreview {
     // Add prefix image if needed
     fileprivate func addImagePrefixIfNeeded(_ image: String, result: Response) -> String {
 
-        var image = image
+        let canonicalUrl = result.canonicalUrl
+        let finalUrl = result.finalUrl.absoluteString
 
-        if let canonicalUrl = result.canonicalUrl, let finalUrl = result.finalUrl?.absoluteString {
-            if finalUrl.hasPrefix("https:") {
-                if image.hasPrefix("//") {
-                    image = "https:" + image
-                } else if image.hasPrefix("/") {
-                    image = "https://" + canonicalUrl + image
-                }
-            } else if image.hasPrefix("//") {
-                image = "http:" + image
+        if finalUrl.hasPrefix("https:") {
+            if image.hasPrefix("//") {
+                return "https:" + image
             } else if image.hasPrefix("/") {
-                image = "http://" + canonicalUrl + image
+                return "https://" + canonicalUrl + image
             }
+        } else if image.hasPrefix("//") {
+            return "http:" + image
+        } else if image.hasPrefix("/") {
+            return "http://" + canonicalUrl + image
         }
 
         return removeSuffixIfNeeded(image)
