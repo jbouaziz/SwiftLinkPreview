@@ -8,7 +8,7 @@
 
 import Foundation
 
-internal extension Response {
+internal extension LinkPreviewResponse {
     
     var dictionary: [String: Any] {
         var responseData:[String: Any] = [:]

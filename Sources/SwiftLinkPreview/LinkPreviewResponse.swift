@@ -8,7 +8,7 @@
 
 import Foundation
 
-public struct Response: Equatable {
+public struct LinkPreviewResponse: Equatable {
     
     public let url: URL
     public let finalUrl: URL

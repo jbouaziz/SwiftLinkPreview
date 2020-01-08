@@ -81,7 +81,8 @@ open class SwiftLinkPreview: NSObject {
     // MARK: - Functions
     // Make preview
     //Swift-only preview function using Swift specific closure types
-    @nonobjc @discardableResult open func preview(_ text: String, onSuccess: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) -> Cancellable {
+    @nonobjc @discardableResult
+    open func preview(_ text: String, onSuccess: @escaping (LinkPreviewResponse) -> Void, onError: @escaping (PreviewError) -> Void) -> Cancellable {
 
         let cancellable = Cancellable()
 
@@ -91,7 +92,7 @@ open class SwiftLinkPreview: NSObject {
             delegateQueue: self.session.delegateQueue
         )
 
-        let successResponseQueue = { (response: Response) in
+        let successResponseQueue = { (response: LinkPreviewResponse) in
             guard !cancellable.isCancelled else { return }
             self.responseQueue.async {
                 guard !cancellable.isCancelled else { return }
@@ -122,7 +123,7 @@ open class SwiftLinkPreview: NSObject {
                     if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
                         successResponseQueue(result)
                     } else {
-                        var result = Response(url: url)
+                        var result = LinkPreviewResponse(url: url)
 
                         self.extractInfo(response: &result, cancellable: cancellable, completion: { result in
                             self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
@@ -154,7 +155,7 @@ open class SwiftLinkPreview: NSObject {
      */
     @objc @discardableResult open func previewLink(_ text: String, onSuccess: @escaping (Dictionary<String, Any>) -> Void, onError: @escaping (NSError) -> Void) -> Cancellable {
 
-        func success (_ result: Response) {
+        func success (_ result: LinkPreviewResponse) {
             onSuccess(result.dictionary)
         }
 
@@ -251,7 +252,7 @@ extension SwiftLinkPreview {
     }
 
     // Extract HTML code and the information contained on it
-    fileprivate func extractInfo(response: inout Response, cancellable: Cancellable, completion: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) {
+    fileprivate func extractInfo(response: inout LinkPreviewResponse, cancellable: Cancellable, completion: @escaping (LinkPreviewResponse) -> Void, onError: @escaping (PreviewError) -> Void) {
         guard !cancellable.isCancelled else { return }
 
         let url = response.finalUrl
@@ -306,7 +307,7 @@ extension SwiftLinkPreview {
         }
     }
 
-    private func parseHtmlString(_ htmlString: String, response: Response, completion: @escaping (Response) -> Void) {
+    private func parseHtmlString(_ htmlString: String, response: LinkPreviewResponse, completion: @escaping (LinkPreviewResponse) -> Void) {
         completion(self.performPageCrawling(self.cleanSource(htmlString), response: response))
     }
 
@@ -325,7 +326,7 @@ extension SwiftLinkPreview {
     }
 
     // Perform the page crawiling
-    private func performPageCrawling(_ htmlCode: String, response: Response) -> Response {
+    private func performPageCrawling(_ htmlCode: String, response: LinkPreviewResponse) -> LinkPreviewResponse {
         var result = self.crawIcon(htmlCode, result: response)
 
         let sanitizedHtmlCode = htmlCode.deleteTagByPattern(Regex.linkPattern).extendedTrim
@@ -346,7 +347,7 @@ extension SwiftLinkPreview {
 extension SwiftLinkPreview {
 
     // searc for favicn
-    internal func crawIcon(_ htmlCode: String, result: Response) -> Response {
+    internal func crawIcon(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
         var result = result
 
         let metatags = Regex.pregMatchAll(htmlCode, regex: Regex.linkPattern, index: 1)
@@ -369,15 +370,15 @@ extension SwiftLinkPreview {
     }
 
     // Search for meta tags
-    internal func crawlMetaTags(_ htmlCode: String, result: Response) -> Response {
+    internal func crawlMetaTags(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
 
         var result = result
 
         let possibleTags: [String] = [
-            Response.Key.title.rawValue,
-            Response.Key.description.rawValue,
-            Response.Key.image.rawValue,
-            Response.Key.video.rawValue,
+            LinkPreviewResponse.Key.title.rawValue,
+            LinkPreviewResponse.Key.description.rawValue,
+            LinkPreviewResponse.Key.image.rawValue,
+            LinkPreviewResponse.Key.video.rawValue,
         ]
 
         let metatags = Regex.pregMatchAll(htmlCode, regex: Regex.metatagPattern, index: 1)
@@ -393,7 +394,7 @@ extension SwiftLinkPreview {
                     metatag.range(of: "itemprop=\"\(tag)") != nil ||
                     metatag.range(of: "itemprop='\(tag)") != nil) {
 
-                    if let key = Response.Key(rawValue: tag),
+                    if let key = LinkPreviewResponse.Key(rawValue: tag),
                         result.value(for: key) == nil {
                         if let value = Regex.pregMatchFirst(metatag, regex: Regex.metatagContentPattern, index: 2) {
                             let value = value.decoded.extendedTrim
@@ -416,7 +417,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for title if needed
-    internal func crawlTitle(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlTitle(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         let title = result.title
 
@@ -438,7 +439,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for description if needed
-    internal func crawlDescription(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlDescription(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         let description = result.description
 
@@ -453,7 +454,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for images
-    internal func crawlImages(_ htmlCode: String, result: Response) -> Response {
+    internal func crawlImages(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
 
         var result = result
         let mainImage = result.image
@@ -477,7 +478,7 @@ extension SwiftLinkPreview {
     }
     
     // Crawl for price
-    internal func crawlPrice(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlPrice(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         
         let mainPrice = result.price
@@ -493,7 +494,7 @@ extension SwiftLinkPreview {
     }
 
     // Add prefix image if needed
-    fileprivate func addImagePrefixIfNeeded(_ image: String, result: Response) -> String {
+    fileprivate func addImagePrefixIfNeeded(_ image: String, result: LinkPreviewResponse) -> String {
 
         let canonicalUrl = result.canonicalUrl
         let finalUrl = result.finalUrl.absoluteString
