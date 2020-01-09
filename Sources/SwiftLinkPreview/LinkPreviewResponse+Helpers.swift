@@ -8,7 +8,7 @@
 
 import Foundation
 
-internal extension Response {
+internal extension LinkPreviewResponse {
     
     var dictionary: [String: Any] {
         var responseData:[String: Any] = [:]
@@ -40,50 +40,47 @@ internal extension Response {
     
     mutating func set(_ value: Any, for key: Key) {
         switch key {
-        case Key.url:
-            if let value = value as? URL { self.url = value }
-        case Key.finalUrl:
-            if let value = value as? URL { self.finalUrl = value }
-        case Key.canonicalUrl:
-            if let value = value as? String { self.canonicalUrl = value }
-        case Key.title:
+        case .url, .finalUrl, .canonicalUrl:
+            // Those are not updatable
+            break
+        case .title:
             if let value = value as? String { self.title = value }
-        case Key.description:
+        case .description:
             if let value = value as? String { self.description = value }
-        case Key.image:
+        case .image:
             if let value = value as? String { self.image = value }
-        case Key.images:
+        case .images:
             if let value = value as? [String] { self.images = value }
-        case Key.icon:
+        case .icon:
             if let value = value as? String { self.icon = value }
-        case Key.video:
+        case .video:
             if let value = value as? String { self.video = value }
-        case Key.price:
+        case .price:
             if let value = value as? String { self.price = value }
         }
     }
     
     func value(for key: Key) -> Any? {
         switch key {
-        case Key.url:
+        case .url:
             return self.url
-        case Key.finalUrl:
+        case .finalUrl:
             return self.finalUrl
-        case Key.canonicalUrl:
+        case .canonicalUrl:
             return self.canonicalUrl
-        case Key.title:
+        case .title:
             return self.title
-        case Key.description:
+        case .description:
             return self.description
-        case Key.image:
+        case .image:
             return self.image
-        case Key.images:
+        case .images:
             return self.images
-        case Key.icon:
+        case .icon:
             return self.icon
-        case Key.video:
+        case .video:
             return self.video
-        case Key.price:
+        case .price:
             return self.price
         }
     }

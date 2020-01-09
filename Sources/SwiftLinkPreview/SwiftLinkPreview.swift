@@ -81,7 +81,8 @@ open class SwiftLinkPreview: NSObject {
     // MARK: - Functions
     // Make preview
     //Swift-only preview function using Swift specific closure types
-    @nonobjc @discardableResult open func preview(_ text: String, onSuccess: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) -> Cancellable {
+    @nonobjc @discardableResult
+    open func preview(_ text: String, onSuccess: @escaping (LinkPreviewResponse) -> Void, onError: @escaping (PreviewError) -> Void) -> Cancellable {
 
         let cancellable = Cancellable()
 
@@ -91,7 +92,7 @@ open class SwiftLinkPreview: NSObject {
             delegateQueue: self.session.delegateQueue
         )
 
-        let successResponseQueue = { (response: Response) in
+        let successResponseQueue = { (response: LinkPreviewResponse) in
             guard !cancellable.isCancelled else { return }
             self.responseQueue.async {
                 guard !cancellable.isCancelled else { return }
@@ -122,20 +123,9 @@ open class SwiftLinkPreview: NSObject {
                     if let result = self.cache.slp_getCachedResponse(url: unshortened.absoluteString) {
                         successResponseQueue(result)
                     } else {
-                        var result = Response()
-                        result.url = url
-                        result.finalUrl = self.extractInURLRedirectionIfNeeded(unshortened)
-                        result.canonicalUrl = self.extractCanonicalURL(unshortened)
+                        var result = LinkPreviewResponse(url: url)
 
-                        self.extractInfo(response: result, cancellable: cancellable, completion: {
-                            result.title = $0.title
-                            result.description = $0.description
-                            result.image = $0.image
-                            result.images = $0.images
-                            result.icon = $0.icon
-                            result.video = $0.video
-                            result.price = $0.price
-
+                        self.extractInfo(response: &result, cancellable: cancellable, completion: { result in
                             self.cache.slp_setCachedResponse(url: unshortened.absoluteString, response: result)
                             self.cache.slp_setCachedResponse(url: url.absoluteString, response: result)
 
@@ -147,34 +137,6 @@ open class SwiftLinkPreview: NSObject {
         }
 
         return cancellable
-    }
-
-    /*
-     Extract url redirection inside the GET query.
-     Like https://www.dji.com/404?url=http%3A%2F%2Fwww.dji.com%2Fmatrice600-pro%2Finfo#specs -> http://www.dji.com/de/matrice600-pro/info#specs
-     */
-    private func extractInURLRedirectionIfNeeded(_ url: URL) -> URL {
-        var url = url
-        var absoluteString = url.absoluteString + "&id=12"
-
-        if let range = absoluteString.range(of: "url="),
-            let lastChar = absoluteString.last,
-            let lastCharIndex = absoluteString.range(of: String(lastChar), options: .backwards, range: nil, locale: nil) {
-            absoluteString = String(absoluteString[range.upperBound ..< lastCharIndex.upperBound])
-
-            if let range = absoluteString.range(of: "&"),
-                let firstChar = absoluteString.first,
-                let firstCharIndex = absoluteString.firstIndex(of: firstChar) {
-                absoluteString = String(absoluteString[firstCharIndex ..< absoluteString.index(before: range.upperBound)])
-
-                if let decoded = absoluteString.removingPercentEncoding, let newURL = URL(string: decoded) {
-                    url = newURL
-                }
-            }
-
-        }
-
-        return url
     }
 
     //Objective-C wrapper for preview method.  Core incompataility is use of Swift specific enum types in closures.
@@ -193,7 +155,7 @@ open class SwiftLinkPreview: NSObject {
      */
     @objc @discardableResult open func previewLink(_ text: String, onSuccess: @escaping (Dictionary<String, Any>) -> Void, onError: @escaping (NSError) -> Void) -> Cancellable {
 
-        func success (_ result: Response) {
+        func success (_ result: LinkPreviewResponse) {
             onSuccess(result.dictionary)
         }
 
@@ -290,31 +252,16 @@ extension SwiftLinkPreview {
     }
 
     // Extract HTML code and the information contained on it
-    fileprivate func extractInfo(response: Response, cancellable: Cancellable, completion: @escaping (Response) -> Void, onError: @escaping (PreviewError) -> Void) {
+    fileprivate func extractInfo(response: inout LinkPreviewResponse, cancellable: Cancellable, completion: @escaping (LinkPreviewResponse) -> Void, onError: @escaping (PreviewError) -> Void) {
+        guard !cancellable.isCancelled else { return }
 
-        guard !cancellable.isCancelled, let url = response.finalUrl else { return }
-
-        func requestSync(sourceUrl: URL, request: URLRequest) -> (Bool, Data?, URLResponse?) {
-
-            let (data, urlResponse, error) = session.synchronousDataTask(with: request )
-            if let error = error {
-                if !cancellable.isCancelled {
-                    let details = "\(sourceUrl.absoluteString): \(error.localizedDescription)"
-                    onError( .cannotBeOpened( details ) )
-                    return (false, data, urlResponse)
-                }
-            }
-            return (true, data, urlResponse)
-
-        }
+        let url = response.finalUrl
 
         guard !url.absoluteString.isImage() else {
-            var result = response
-            result.title = ""
-            result.description = ""
-            result.images = [url.absoluteString]
-            result.image = url.absoluteString
-            completion(result)
+            // If it's an image, there's no title
+            response.images = [url.absoluteString]
+            response.image = url.absoluteString
+            completion(response)
             return
         }
 
@@ -360,7 +307,7 @@ extension SwiftLinkPreview {
         }
     }
 
-    private func parseHtmlString(_ htmlString: String, response: Response, completion: @escaping (Response) -> Void) {
+    private func parseHtmlString(_ htmlString: String, response: LinkPreviewResponse, completion: @escaping (LinkPreviewResponse) -> Void) {
         completion(self.performPageCrawling(self.cleanSource(htmlString), response: response))
     }
 
@@ -379,7 +326,7 @@ extension SwiftLinkPreview {
     }
 
     // Perform the page crawiling
-    private func performPageCrawling(_ htmlCode: String, response: Response) -> Response {
+    private func performPageCrawling(_ htmlCode: String, response: LinkPreviewResponse) -> LinkPreviewResponse {
         var result = self.crawIcon(htmlCode, result: response)
 
         let sanitizedHtmlCode = htmlCode.deleteTagByPattern(Regex.linkPattern).extendedTrim
@@ -394,38 +341,13 @@ extension SwiftLinkPreview {
 
         return self.crawlImages(otherResponse.htmlCode, result: otherResponse.result)
     }
-
-    // Extract canonical URL
-    internal func extractCanonicalURL(_ finalUrl: URL) -> String {
-
-        let preUrl: String = finalUrl.absoluteString
-        let url = preUrl
-            .replace("http://", with: "")
-            .replace("https://", with: "")
-            .replace("file://", with: "")
-            .replace("ftp://", with: "")
-
-        guard preUrl != url else {
-            return self.extractBaseUrl(preUrl)
-        }
-        if let canonicalUrl = Regex.pregMatchFirst(url, regex: Regex.cannonicalUrlPattern, index: 1),
-            !canonicalUrl.isEmpty {
-            return extractBaseUrl(canonicalUrl)
-        }
-        return extractBaseUrl(url)
-    }
-
-    // Extract base URL
-    fileprivate func extractBaseUrl(_ url: String) -> String {
-        return String(url.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true)[0])
-    }
 }
 
 // Tag functions
 extension SwiftLinkPreview {
 
     // searc for favicn
-    internal func crawIcon(_ htmlCode: String, result: Response) -> Response {
+    internal func crawIcon(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
         var result = result
 
         let metatags = Regex.pregMatchAll(htmlCode, regex: Regex.linkPattern, index: 1)
@@ -448,15 +370,15 @@ extension SwiftLinkPreview {
     }
 
     // Search for meta tags
-    internal func crawlMetaTags(_ htmlCode: String, result: Response) -> Response {
+    internal func crawlMetaTags(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
 
         var result = result
 
         let possibleTags: [String] = [
-            Response.Key.title.rawValue,
-            Response.Key.description.rawValue,
-            Response.Key.image.rawValue,
-            Response.Key.video.rawValue,
+            LinkPreviewResponse.Key.title.rawValue,
+            LinkPreviewResponse.Key.description.rawValue,
+            LinkPreviewResponse.Key.image.rawValue,
+            LinkPreviewResponse.Key.video.rawValue,
         ]
 
         let metatags = Regex.pregMatchAll(htmlCode, regex: Regex.metatagPattern, index: 1)
@@ -472,7 +394,7 @@ extension SwiftLinkPreview {
                     metatag.range(of: "itemprop=\"\(tag)") != nil ||
                     metatag.range(of: "itemprop='\(tag)") != nil) {
 
-                    if let key = Response.Key(rawValue: tag),
+                    if let key = LinkPreviewResponse.Key(rawValue: tag),
                         result.value(for: key) == nil {
                         if let value = Regex.pregMatchFirst(metatag, regex: Regex.metatagContentPattern, index: 2) {
                             let value = value.decoded.extendedTrim
@@ -495,7 +417,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for title if needed
-    internal func crawlTitle(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlTitle(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         let title = result.title
 
@@ -517,7 +439,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for description if needed
-    internal func crawlDescription(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlDescription(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         let description = result.description
 
@@ -532,7 +454,7 @@ extension SwiftLinkPreview {
     }
 
     // Crawl for images
-    internal func crawlImages(_ htmlCode: String, result: Response) -> Response {
+    internal func crawlImages(_ htmlCode: String, result: LinkPreviewResponse) -> LinkPreviewResponse {
 
         var result = result
         let mainImage = result.image
@@ -556,7 +478,7 @@ extension SwiftLinkPreview {
     }
     
     // Crawl for price
-    internal func crawlPrice(_ htmlCode: String, result: Response) -> (htmlCode: String, result: Response) {
+    internal func crawlPrice(_ htmlCode: String, result: LinkPreviewResponse) -> (htmlCode: String, result: LinkPreviewResponse) {
         var result = result
         
         let mainPrice = result.price
@@ -572,22 +494,21 @@ extension SwiftLinkPreview {
     }
 
     // Add prefix image if needed
-    fileprivate func addImagePrefixIfNeeded(_ image: String, result: Response) -> String {
+    fileprivate func addImagePrefixIfNeeded(_ image: String, result: LinkPreviewResponse) -> String {
 
-        var image = image
+        let canonicalUrl = result.canonicalUrl
+        let finalUrl = result.finalUrl.absoluteString
 
-        if let canonicalUrl = result.canonicalUrl, let finalUrl = result.finalUrl?.absoluteString {
-            if finalUrl.hasPrefix("https:") {
-                if image.hasPrefix("//") {
-                    image = "https:" + image
-                } else if image.hasPrefix("/") {
-                    image = "https://" + canonicalUrl + image
-                }
-            } else if image.hasPrefix("//") {
-                image = "http:" + image
+        if finalUrl.hasPrefix("https:") {
+            if image.hasPrefix("//") {
+                return "https:" + image
             } else if image.hasPrefix("/") {
-                image = "http://" + canonicalUrl + image
+                return "https://" + canonicalUrl + image
             }
+        } else if image.hasPrefix("//") {
+            return "http:" + image
+        } else if image.hasPrefix("/") {
+            return "http://" + canonicalUrl + image
         }
 
         return removeSuffixIfNeeded(image)
